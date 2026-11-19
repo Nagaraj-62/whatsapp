@@ -5,11 +5,11 @@ frappe.ui.form.on("WA Message", {
 	refresh: function (frm) {
 		frm.trigger("is_template");
 		frm.trigger("direction");
-		if (frm.is_new() && frm.doc.direction === "Outgoing" && !frm.doc.whatsapp_account) {
-			frappe.db.get_single_value("WA Settings", "default_account").then((account) => {
-				if (account) frm.set_value("whatsapp_account", account);
-			});
-		}
+		set_outgoing_account(frm);
+	},
+
+	to: function (frm) {
+		set_outgoing_account(frm);
 	},
 
 	is_template: function (frm) {
@@ -61,6 +61,31 @@ frappe.ui.form.on("WA Message", {
 		}
 	},
 });
+
+function set_outgoing_account(frm) {
+	if (!frm.is_new() || frm.doc.direction !== "Outgoing") return;
+
+	if (frm.doc.to) {
+		frappe.db.get_value("WA Profile", frm.doc.to, "whatsapp_account", (r) => {
+			const account = r && r.whatsapp_account;
+			if (account) {
+				if (frm.doc.whatsapp_account !== account) frm.set_value("whatsapp_account", account);
+				return;
+			}
+			set_default_account(frm);
+		});
+		return;
+	}
+
+	set_default_account(frm);
+}
+
+function set_default_account(frm) {
+	if (frm.doc.whatsapp_account) return;
+	frappe.db.get_single_value("WA Settings", "default_account").then((account) => {
+		if (account && !frm.doc.whatsapp_account) frm.set_value("whatsapp_account", account);
+	});
+}
 
 function has_template_variables(text) {
 	if (!text) return false;

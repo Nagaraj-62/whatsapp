@@ -33,12 +33,15 @@ class IntegrationTestWAMessage(IntegrationTestCase):
 	# -------------------------------------------------------------------------
 
 	def _make_account(self) -> str:
+		return self._make_account_with_phone("1234567890")
+
+	def _make_account_with_phone(self, phone_id: str) -> str:
 		uid = frappe.generate_hash(length=6)
 		doc = frappe.get_doc(
 			doctype="WA Account",
 			account_name=f"_Test Account {uid}",
 			status="Active",
-			phone_id="1234567890",
+			phone_id=phone_id,
 			business_id="test_business",
 			app_id="test_app",
 			access_token="test_token",
@@ -116,10 +119,73 @@ class IntegrationTestWAMessage(IntegrationTestCase):
 		self.assertRaises(frappe.ValidationError, doc.validate)
 
 	def test_validate_outgoing_missing_account(self):
-		data = self._make_outgoing()
-		data["whatsapp_account"] = ""
-		doc = frappe.get_doc(data)
+		doc = frappe.get_doc(
+			doctype="WA Message",
+			direction="Outgoing",
+			to="not-a-profile",
+			whatsapp_account="",
+		)
 		self.assertRaises(frappe.ValidationError, doc.validate)
+
+	def test_outgoing_uses_profile_account_instead_of_default(self):
+		"""A profile linked to another number must not be sent from the site default."""
+		default_account = self._make_account_with_phone("15550000564")
+		profile_account = self._make_account_with_phone("15550006909")
+		frappe.db.set_single_value("WA Settings", "default_account", default_account)
+		profile = self._make_profile("+918465068862", profile_account, "nagarajukodela")
+
+		msg = frappe.get_doc(
+			doctype="WA Message",
+			direction="Outgoing",
+			to=profile,
+			whatsapp_account=default_account,
+			message="hi",
+			**{"from": "15550000564"},
+		).insert()
+
+		self.assertEqual(msg.whatsapp_account, profile_account)
+		self.assertEqual(msg.get("from"), "15550006909")
+
+	def test_submit_rewrites_a_draft_saved_on_the_default_account(self):
+		default_account = self._make_account_with_phone("15550001564")
+		profile_account = self._make_account_with_phone("15550016909")
+		frappe.db.set_single_value("WA Settings", "default_account", default_account)
+		profile = self._make_profile("+918465068863", profile_account)
+
+		msg = frappe.get_doc(
+			doctype="WA Message",
+			direction="Outgoing",
+			to=profile,
+			message="hi",
+		).insert()
+		frappe.db.set_value(
+			"WA Message",
+			msg.name,
+			{"whatsapp_account": default_account, "from": "15550001564"},
+			update_modified=False,
+		)
+		msg.reload()
+
+		with patch.object(msg, "_send"):
+			msg.submit()
+
+		self.assertEqual(msg.whatsapp_account, profile_account)
+		self.assertEqual(msg.get("from"), "15550016909")
+
+	def test_profile_without_account_still_uses_default(self):
+		default_account = self._make_account_with_phone("15550002564")
+		frappe.db.set_single_value("WA Settings", "default_account", default_account)
+		profile = self._make_profile("+918465068864", default_account)
+		frappe.db.set_value("WA Profile", profile, "whatsapp_account", None)
+
+		msg = frappe.get_doc(
+			doctype="WA Message",
+			direction="Outgoing",
+			to=profile,
+			message="hi",
+		).insert()
+
+		self.assertEqual(msg.whatsapp_account, default_account)
 
 	def test_validate_skipped_for_incoming(self):
 		doc = frappe.get_doc(

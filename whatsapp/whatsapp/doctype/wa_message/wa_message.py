@@ -57,16 +57,21 @@ class WAMessage(Document):
 	# end: auto-generated types
 
 	def before_insert(self) -> None:
-		if self.direction == "Outgoing" and not self.whatsapp_account:
-			default_account = frappe.db.get_single_value("WA Settings", "default_account")
-			if default_account:
-				self.whatsapp_account = default_account
+		if self.direction != "Outgoing":
+			return
+		self._set_account_from_profile()
+		if self.whatsapp_account:
+			return
+		default_account = frappe.db.get_single_value("WA Settings", "default_account")
+		if default_account:
+			self.whatsapp_account = default_account
 
 	def after_insert(self) -> None:
 		self.notify_change()
 
 	def validate(self) -> None:
 		if self.direction == "Outgoing":
+			self._set_account_from_profile()
 			self._validate_outgoing()
 			self._set_from_number()
 			self._resolve_reply_to_context()
@@ -112,6 +117,21 @@ class WAMessage(Document):
 			docname=self.reference_docname,
 			after_commit=True,
 		)
+
+	def _set_account_from_profile(self) -> None:
+		"""Send on the recipient profile's number.
+
+		The site default is the fallback for a phone number that has no profile yet.
+		A profile already names its account, and Meta accepts the message only from
+		that number.
+		"""
+		if not self.to:
+			return
+		account = frappe.db.get_value("WA Profile", self.to, "whatsapp_account")
+		if not account or account == self.whatsapp_account:
+			return
+		self.whatsapp_account = account
+		self.set("from", None)
 
 	def _validate_outgoing(self) -> None:
 		if not self.to:
